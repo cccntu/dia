@@ -1,4 +1,3 @@
-import dac
 import numpy as np
 import torch
 import torchaudio
@@ -9,6 +8,18 @@ try:
     SAFETENSORS_AVAILABLE = True
 except ImportError:
     SAFETENSORS_AVAILABLE = False
+
+# Import the right DAC module - ensure we import descript-audio-codec not dac
+try:
+    from descript_audio_codec.api import DAC
+    DAC_AVAILABLE = True
+except ImportError:
+    try:
+        import dac
+        # Check if it's the right DAC module
+        DAC_AVAILABLE = hasattr(dac, 'DAC')
+    except ImportError:
+        DAC_AVAILABLE = False
 
 from .audio import audio_to_codebook, codebook_to_audio
 from .config import DiaConfig
@@ -170,46 +181,64 @@ class Dia:
 
     def _load_dac_model(self):
         try:
-            # Handle different versions of dac module
-            if hasattr(dac, 'utils') and hasattr(dac.utils, 'download'):
-                dac_model_path = dac.utils.download()
-            else:
-                # Fallback for newer dac versions
-                import os
-                import requests
-                
-                # Use direct download from HuggingFace
-                from huggingface_hub import hf_hub_download
-                
-                os.makedirs(os.path.expanduser("~/.cache/descript/dac"), exist_ok=True)
-                
-                # Try different repos that might host the DAC model
+            import os
+            import requests
+            from huggingface_hub import hf_hub_download
+            
+            # Create cache directory
+            os.makedirs(os.path.expanduser("~/.cache/descript/dac"), exist_ok=True)
+            cache_dir = os.path.expanduser("~/.cache/descript/dac")
+            
+            # Try to download the DAC model from various sources
+            dac_model_path = None
+            
+            # First check if HF cache already has it
+            local_files = os.listdir(cache_dir)
+            for file in local_files:
+                if file.endswith('dac.pth') or file == 'dac.pth':
+                    dac_model_path = os.path.join(cache_dir, file)
+                    print(f"Found existing DAC model at {dac_model_path}")
+                    break
+            
+            # If not found, try to download
+            if dac_model_path is None:
+                # Try direct download from Hugging Face repos
                 repos = [
-                    "facebook/dac-configs", 
-                    "ttj/dia-1.6b-safetensors",  # Try your repo as it may have the model
-                    "nari-labs/Dia-1.6B"         # Try original repo
+                    "ttj/dia-1.6b-safetensors",  # Try user's repo first
+                    "nari-labs/Dia-1.6B",
+                    "descriptinc/descript-audio-codec"
                 ]
                 
-                dac_model_path = None
                 for repo in repos:
                     try:
                         print(f"Trying to download DAC model from {repo}...")
                         dac_model_path = hf_hub_download(
                             repo_id=repo,
                             filename="dac.pth",
-                            cache_dir=os.path.expanduser("~/.cache/descript/dac")
+                            cache_dir=cache_dir
                         )
-                        print(f"DAC model downloaded from {repo}")
-                        break
+                        if os.path.exists(dac_model_path):
+                            print(f"DAC model downloaded from {repo}")
+                            break
                     except Exception as e:
-                        print(f"Failed to download from {repo}: {e}")
-                
-                if dac_model_path is None:
-                    raise RuntimeError("Could not find DAC model in any repository")
-                
-            dac_model = dac.DAC.load(dac_model_path).to(self.device)
+                        print(f"Failed to download from {repo}: {str(e)}")
+                        continue
+            
+            # If still not found, error out
+            if dac_model_path is None or not os.path.exists(dac_model_path):
+                raise RuntimeError("Could not find or download DAC model")
+            
+            # Load the DAC model
+            if DAC_AVAILABLE:
+                from descript_audio_codec.api import DAC
+                dac_model = DAC.load(dac_model_path).to(self.device)
+            else:
+                import dac
+                dac_model = dac.DAC.load(dac_model_path).to(self.device)
+        
         except Exception as e:
-            raise RuntimeError("Failed to load DAC model") from e
+            raise RuntimeError(f"Failed to load DAC model: {str(e)}") from e
+        
         self.dac_model = dac_model
 
     def _create_attn_mask(
