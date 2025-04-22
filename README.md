@@ -1,143 +1,144 @@
-<p align="center">
-<a href="https://github.com/nari-labs/dia">
-<img src="./dia/static/images/banner.png">
-</a>
-</p>
-<p align="center">
-<a href="https://tally.so/r/meokbo" target="_blank"><img alt="Static Badge" src="https://img.shields.io/badge/Join-Waitlist-white?style=for-the-badge"></a>
-<a href="https://discord.gg/pgdB5YRe" target="_blank"><img src="https://img.shields.io/badge/Discord-Join%20Chat-7289DA?logo=discord&style=for-the-badge"></a>
-<a href="https://github.com/nari-labs/dia/blob/main/LICENSE" target="_blank"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=for-the-badge" alt="LICENSE"></a>
-</p>
-<p align="center">
-<a href="https://huggingface.co/nari-labs/Dia-1.6B"><img src="https://huggingface.co/datasets/huggingface/badges/resolve/main/model-on-hf-lg-dark.svg" alt="Dataset on HuggingFace" height=42 ></a>
-<a href="https://huggingface.co/spaces/nari-labs/Dia-1.6B"><img src="https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-lg-dark.svg" alt="Space on HuggingFace" height=38></a>
-</p>
+# Dia-1.6B: Text-to-Speech Model for Dialogue Generation
 
-Dia is a 1.6B parameter text to speech model created by Nari Labs.
+<div align="center">
+  <img src="images/banner.png" width="600px"/>
+</div>
 
-Dia **directly generates highly realistic dialogue from a transcript**. You can condition the output on audio, enabling emotion and tone control. The model can also produce nonverbal communications like laughter, coughing, clearing throat, etc.
+[![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch 2.6+](https://img.shields.io/badge/pytorch-2.6+-blue.svg)](https://pytorch.org/get-started/locally/)
 
-To accelerate research, we are providing access to pretrained model checkpoints and inference code. The model weights are hosted on [Hugging Face](https://huggingface.co/nari-labs/Dia-1.6B). The model only supports English generation at the moment.
+> **Note**: This is a fork of [nari-labs/Dia-1.6B](https://github.com/nari-labs/Dia-1.6B) with additional features including safetensors support and packaging improvements.
 
-We also provide a [demo page](https://yummy-fir-7a4.notion.site/dia) comparing our model to [ElevenLabs Studio](https://elevenlabs.io/studio) and [Sesame CSM-1B](https://github.com/SesameAILabs/csm).
+## About Dia
 
-- (Update) We have a ZeroGPU Space running! Try it now [here](https://huggingface.co/spaces/nari-labs/Dia-1.6B). Thanks to the HF team for the support :)
-- Join our [discord server](https://discord.gg/pgdB5YRe) for community support and access to new features.
-- Play with a larger version of Dia: generate fun conversations, remix content, and share with friends. 🔮 Join the [waitlist](https://tally.so/r/meokbo) for early access.
+Dia is a 1.6 billion parameter text-to-speech model designed for generating realistic dialogue audio with multiple distinct voices. It was developed by Nari Labs and released as an open-source project, allowing complete control over scripts and voices.
 
-## ⚡️ Quickstart
+### Key capabilities:
 
-### Install via pip
+- Generate realistic dialogue between multiple speakers
+- Control speaker identity with simple tags in the prompt text
+- Voice cloning from sample audio
+- Supports both original .pth model weights and safetensors format
+
+## What's New in This Fork
+
+This fork enhances the original Dia model with:
+
+1. **Safetensors Support**: Added support for loading models in the safetensors format, which offers:
+   - Faster loading times
+   - Improved security
+   - Better compatibility across PyTorch versions
+   - Support for BF16 precision
+   - Reduced memory usage during loading
+
+2. **Packaging Improvements**:
+   - Properly configured pyproject.toml for pip installation
+   - Relaxed dependency constraints for better compatibility
+   - Fixed path handling for DAC model loading
+
+3. **New Examples**:
+   - Added safetensors_example.py demonstrating BF16 precision model usage
+
+## Installation
+
+You can install this package directly from GitHub:
 
 ```bash
-# Install directly from GitHub
-pip install git+https://github.com/nari-labs/dia.git
+pip install git+https://github.com/ttj/dia-1.6b-safetensors.git
 ```
 
-### Run the Gradio UI
+### Requirements
 
-This will open a Gradio UI that you can work on.
+- Python 3.10+
+- PyTorch 2.6+
+- CUDA (optional, but recommended for faster inference)
 
-```bash
-git clone https://github.com/nari-labs/dia.git
-cd dia && uv run app.py
-```
+## Usage
 
-or if you do not have `uv` pre-installed:
-
-```bash
-git clone https://github.com/nari-labs/dia.git
-cd dia
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-python app.py
-```
-
-Note that the model was not fine-tuned on a specific voice. Hence, you will get different voices every time you run the model.
-You can keep speaker consistency by either adding an audio prompt (a guide coming VERY soon - try it with the second example on Gradio for now), or fixing the seed.
-
-## Features
-
-- Generate dialogue via `[S1]` and `[S2]` tag
-- Generate non-verbal like `(laughs)`, `(coughs)`, etc.
-- Voice cloning. See [`example/voice_clone.py`](example/voice_clone.py) for more information.
-  - In the Hugging Face space, you can upload the audio you want to clone and place its transcript before your script. Make sure the transcript follows the required format. The model will then output only the content of your script.
-
-## ⚙️ Usage
-
-### As a Python Library
+### Basic Example
 
 ```python
 import soundfile as sf
-
 from dia.model import Dia
 
+# Load the original model
+model = Dia.from_pretrained("nari-labs/Dia-1.6B")
+
+# Create a prompt with speaker tags
+text = "[S1] Hello, how are you? [S2] I'm doing well, thank you! [S1] That's great to hear."
+
+# Generate audio
+output = model.generate(text)
+
+# Save to file
+sf.write("output.mp3", output, 44100)
+```
+
+### Using Safetensors Model with BF16 Precision
+
+```python
+import soundfile as sf
+from dia.model import Dia
+
+# Load the safetensors model with BF16 precision
+model = Dia.from_pretrained(
+    model_name="ttj/dia-1.6b-safetensors",
+    dtype="bf16"
+)
+
+# Create a prompt with speaker tags
+text = "[S1] Have you heard about the new safetensors version of Dia? [S2] Yes, it's more efficient and supports BF16 precision!"
+
+# Generate audio
+output = model.generate(text)
+
+# Save to file
+sf.write("safetensors_output.mp3", output, 44100)
+```
+
+### Voice Cloning
+
+```python
+import soundfile as sf
+from dia.model import Dia
 
 model = Dia.from_pretrained("nari-labs/Dia-1.6B")
 
-text = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
+# Define the transcript of your reference audio
+clone_from_text = "[S1] This is an example of my voice. [S2] And this is another voice."
+clone_from_audio = "reference_audio.mp3"  # Path to your reference audio
 
-output = model.generate(text)
+# New text to generate with the same voices
+new_text = "[S1] I'm speaking with the cloned voice. [S2] Me too!"
 
-sf.write("simple.mp3", output, 44100)
+# Generate using voice cloning
+output = model.generate(
+    clone_from_text + new_text,
+    audio_prompt_path=clone_from_audio
+)
+
+sf.write("voice_clone_output.mp3", output, 44100)
 ```
 
-A pypi package and a working CLI tool will be available soon.
+## Advanced Parameters
 
-## 💻 Hardware and Inference Speed
+```python
+output = model.generate(
+    text=your_text,
+    temperature=1.3,    # Controls randomness (higher = more random)
+    top_p=0.95,         # Controls diversity of word choices 
+    cfg_scale=3.0,      # Controls how closely output follows the prompt
+    max_tokens=None     # Limit generation length (None = use default)
+)
+```
 
-Dia has been tested on only GPUs (pytorch 2.0+, CUDA 12.6). CPU support is to be added soon.
-The initial run will take longer as the Descript Audio Codec also needs to be downloaded.
+## Credits
 
-On enterprise GPUs, Dia can generate audio in real-time. On older GPUs, inference time will be slower.
-For reference, on a A4000 GPU, Dia roughly generates 40 tokens/s (86 tokens equals 1 second of audio).
-`torch.compile` will increase speeds for supported GPUs.
+This model was originally created by [Nari Labs](https://github.com/nari-labs) as [Dia-1.6B](https://github.com/nari-labs/Dia-1.6B).
 
-The full version of Dia requires around 10GB of VRAM to run. We will be adding a quantized version in the future.
+This fork adds safetensors support and packaging improvements to make the model more accessible and easier to use.
 
-If you don't have hardware available or if you want to play with bigger versions of our models, join the waitlist [here](https://tally.so/r/meokbo).
+## License
 
-## 🪪 License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
-## ⚠️ Disclaimer
-
-This project offers a high-fidelity speech generation model intended for research and educational use. The following uses are **strictly forbidden**:
-
-- **Identity Misuse**: Do not produce audio resembling real individuals without permission.
-- **Deceptive Content**: Do not use this model to generate misleading content (e.g. fake news)
-- **Illegal or Malicious Use**: Do not use this model for activities that are illegal or intended to cause harm.
-
-By using this model, you agree to uphold relevant legal standards and ethical responsibilities. We **are not responsible** for any misuse and firmly oppose any unethical usage of this technology.
-
-## 🔭 TODO / Future Work
-
-- Docker support.
-- Optimize inference speed.
-- Add quantization for memory efficiency.
-
-## 🤝 Contributing
-
-We are a tiny team of 1 full-time and 1 part-time research-engineers. We are extra-welcome to any contributions!
-Join our [Discord Server](https://discord.gg/pgdB5YRe) for discussions.
-
-## 🤗 Acknowledgements
-
-- We thank the [Google TPU Research Cloud program](https://sites.research.google/trc/about/) for providing computation resources.
-- Our work was heavily inspired by [SoundStorm](https://arxiv.org/abs/2305.09636), [Parakeet](https://jordandarefsky.com/blog/2024/parakeet/), and [Descript Audio Codec](https://github.com/descriptinc/descript-audio-codec).
-- HuggingFace for providing the ZeroGPU Grant.
-- "Nari" is a pure Korean word for lily.
-- We thank Jason Y. for providing help with data filtering.
-
-
-## ⭐ Star History
-
-<a href="https://www.star-history.com/#nari-labs/dia&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=nari-labs/dia&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=nari-labs/dia&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=nari-labs/dia&type=Date" />
- </picture>
-</a>
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
