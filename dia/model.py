@@ -189,16 +189,23 @@ class Dia:
             os.makedirs(os.path.expanduser("~/.cache/descript/dac"), exist_ok=True)
             cache_dir = os.path.expanduser("~/.cache/descript/dac")
             
-            # Try to download the DAC model from various sources
+            # Try to find the DAC model 
             dac_model_path = None
             
-            # First check if HF cache already has it
-            local_files = os.listdir(cache_dir)
-            for file in local_files:
-                if file.endswith('dac.pth') or file == 'dac.pth':
-                    dac_model_path = os.path.join(cache_dir, file)
-                    print(f"Found existing DAC model at {dac_model_path}")
-                    break
+            # First check for local file in descript cache dir
+            cache_file = os.path.join(cache_dir, 'dac.pth')
+            if os.path.exists(cache_file):
+                dac_model_path = cache_file
+                print(f"Found existing DAC model at {dac_model_path}")
+            
+            # Then check if any other files in the cache dir match
+            if dac_model_path is None:
+                local_files = os.listdir(cache_dir)
+                for file in local_files:
+                    if file.endswith('dac.pth') or file == 'dac.pth':
+                        dac_model_path = os.path.join(cache_dir, file)
+                        print(f"Found existing DAC model at {dac_model_path}")
+                        break
             
             # If not found, try to download
             if dac_model_path is None:
