@@ -9,24 +9,9 @@ try:
 except ImportError:
     SAFETENSORS_AVAILABLE = False
 
-# Import the right DAC module - ensure we import descript-audio-codec not dac
-try:
-    from descript_audio_codec import DAC  # Try most common import style
-    DAC_AVAILABLE = True
-except ImportError:
-    try:
-        from descript_audio_codec.api import DAC  # Try alternative style
-        DAC_AVAILABLE = True
-    except ImportError:
-        try:
-            import dac  # Try original style
-            if hasattr(dac, 'DAC'):
-                DAC = dac.DAC
-                DAC_AVAILABLE = True
-            else:
-                DAC_AVAILABLE = False
-        except ImportError:
-            DAC_AVAILABLE = False
+# Import original DAC style since the package structure is not standard
+import dac
+DAC_AVAILABLE = True
 
 from .audio import audio_to_codebook, codebook_to_audio
 from .config import DiaConfig
@@ -199,11 +184,23 @@ class Dia:
             # Try to find the DAC model 
             dac_model_path = None
             
-            # First check for local file in descript cache dir
-            cache_file = os.path.join(cache_dir, 'dac.pth')
-            if os.path.exists(cache_file):
-                dac_model_path = cache_file
-                print(f"Found existing DAC model at {dac_model_path}")
+            # First try to use dac.utils.download() to get the correct path
+            try:
+                dac_model_path = dac.utils.download()
+                if os.path.exists(dac_model_path):
+                    print(f"Found DAC model with utils.download at {dac_model_path}")
+            except Exception as e:
+                print(f"Failed to use dac.utils.download(): {e}")
+                dac_model_path = None
+                
+            # Then check for common file names in the cache dir
+            if dac_model_path is None:
+                for filename in ['dac.pth', 'weights_44khz_8kbps_0.0.1.pth']:
+                    cache_file = os.path.join(cache_dir, filename)
+                    if os.path.exists(cache_file):
+                        dac_model_path = cache_file
+                        print(f"Found existing DAC model at {dac_model_path}")
+                        break
             
             # Then check if any other files in the cache dir match
             if dac_model_path is None:
@@ -242,16 +239,38 @@ class Dia:
             if dac_model_path is None or not os.path.exists(dac_model_path):
                 raise RuntimeError("Could not find or download DAC model")
             
-            # Load the DAC model
-            if DAC_AVAILABLE:
-                dac_model = DAC.load(dac_model_path).to(self.device)
-            else:
-                # Last resort - try direct import
+            # Load the DAC model with a patch for PyTorch 2.6+ weights_only issue
+            try:
+                # Monkey patch the torch.load in audiotools temporarily
+                import torch
+                import types
+                from functools import partial
+                
+                # Store original torch.load
+                original_torch_load = torch.load
+                
+                # Create patched version with weights_only=False
+                def patched_torch_load(f, *args, **kwargs):
+                    kwargs['weights_only'] = False
+                    return original_torch_load(f, *args, **kwargs)
+                
+                # Monkey patch torch.load temporarily
+                torch.load = patched_torch_load
+                
+                # Now load the DAC model
                 try:
-                    from descript_audio_codec.api import DAC as DirectDAC
-                    dac_model = DirectDAC.load(dac_model_path).to(self.device)
-                except ImportError:
-                    raise RuntimeError("Could not import descript-audio-codec. Please install it with: pip install descript-audio-codec")
+                    dac_model = dac.DAC.load(dac_model_path).to(self.device)
+                finally:
+                    # Restore original torch.load no matter what
+                    torch.load = original_torch_load
+            except Exception as e:
+                print(f"Failed to load DAC with patch: {str(e)}")
+                # One more try with direct code
+                import torch
+                state_dict = torch.load(dac_model_path, map_location="cpu", weights_only=False)
+                dac_model = dac.DAC()
+                dac_model.load_state_dict(state_dict)
+                dac_model = dac_model.to(self.device)
         
         except Exception as e:
             raise RuntimeError(f"Failed to load DAC model: {str(e)}") from e
