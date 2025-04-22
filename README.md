@@ -6,8 +6,14 @@ Dia is a 1.6B parameter text-to-speech model that directly generates highly real
 
 ## Installation
 
+### Core Package (for TTS only)
 ```bash
-pip install git+https://github.com/cccntu/dia.git
+pip install git+https://github.com/cccntu/dia.git@relax-pydantic
+```
+
+### With UI Components (includes Gradio)
+```bash
+pip install "git+https://github.com/cccntu/dia.git@relax-pydantic#egg=dia-tts[ui]"
 ```
 
 ## Basic Usage
