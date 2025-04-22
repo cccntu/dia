@@ -106,11 +106,12 @@ class Dia:
             if checkpoint_path.endswith('.safetensors'):
                 try:
                     from safetensors.torch import load_file
-                    state_dict = load_file(checkpoint_path, device=dia.device)
+                    # Load to CPU first, then transfer to target device
+                    state_dict = load_file(checkpoint_path, device="cpu")
                 except ImportError:
                     raise ImportError("safetensors not installed. Please install with: pip install safetensors")
             else:
-                state_dict = torch.load(checkpoint_path, map_location=dia.device)
+                state_dict = torch.load(checkpoint_path, map_location="cpu")
                 
             dia.model.load_state_dict(state_dict)
         except FileNotFoundError:
