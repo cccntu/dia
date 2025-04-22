@@ -11,15 +11,22 @@ except ImportError:
 
 # Import the right DAC module - ensure we import descript-audio-codec not dac
 try:
-    from descript_audio_codec.api import DAC
+    from descript_audio_codec import DAC  # Try most common import style
     DAC_AVAILABLE = True
 except ImportError:
     try:
-        import dac
-        # Check if it's the right DAC module
-        DAC_AVAILABLE = hasattr(dac, 'DAC')
+        from descript_audio_codec.api import DAC  # Try alternative style
+        DAC_AVAILABLE = True
     except ImportError:
-        DAC_AVAILABLE = False
+        try:
+            import dac  # Try original style
+            if hasattr(dac, 'DAC'):
+                DAC = dac.DAC
+                DAC_AVAILABLE = True
+            else:
+                DAC_AVAILABLE = False
+        except ImportError:
+            DAC_AVAILABLE = False
 
 from .audio import audio_to_codebook, codebook_to_audio
 from .config import DiaConfig
@@ -237,11 +244,14 @@ class Dia:
             
             # Load the DAC model
             if DAC_AVAILABLE:
-                from descript_audio_codec.api import DAC
                 dac_model = DAC.load(dac_model_path).to(self.device)
             else:
-                import dac
-                dac_model = dac.DAC.load(dac_model_path).to(self.device)
+                # Last resort - try direct import
+                try:
+                    from descript_audio_codec.api import DAC as DirectDAC
+                    dac_model = DirectDAC.load(dac_model_path).to(self.device)
+                except ImportError:
+                    raise RuntimeError("Could not import descript-audio-codec. Please install it with: pip install descript-audio-codec")
         
         except Exception as e:
             raise RuntimeError(f"Failed to load DAC model: {str(e)}") from e
