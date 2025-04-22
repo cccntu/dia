@@ -176,14 +176,22 @@ class Dia:
             else:
                 # Fallback for newer dac versions
                 import os
-                from huggingface_hub import hf_hub_download
+                import requests
                 
+                # Use direct download from the official repository
                 os.makedirs(os.path.expanduser("~/.cache/descript/dac"), exist_ok=True)
-                dac_model_path = hf_hub_download(
-                    repo_id="descriptinc/descript-audio-codec", 
-                    filename="dac.pth",
-                    cache_dir=os.path.expanduser("~/.cache/descript/dac")
-                )
+                cache_path = os.path.expanduser("~/.cache/descript/dac/dac.pth")
+                
+                if not os.path.exists(cache_path):
+                    print("Downloading DAC model...")
+                    url = "https://github.com/descriptinc/descript-audio-codec/releases/download/v0.1/dac.pth"
+                    with requests.get(url, stream=True) as r:
+                        r.raise_for_status()
+                        with open(cache_path, 'wb') as f:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                
+                dac_model_path = cache_path
                 
             dac_model = dac.DAC.load(dac_model_path).to(self.device)
         except Exception as e:
