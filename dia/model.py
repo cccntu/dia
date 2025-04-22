@@ -178,20 +178,34 @@ class Dia:
                 import os
                 import requests
                 
-                # Use direct download from the official repository
+                # Use direct download from HuggingFace
+                from huggingface_hub import hf_hub_download
+                
                 os.makedirs(os.path.expanduser("~/.cache/descript/dac"), exist_ok=True)
-                cache_path = os.path.expanduser("~/.cache/descript/dac/dac.pth")
                 
-                if not os.path.exists(cache_path):
-                    print("Downloading DAC model...")
-                    url = "https://github.com/descriptinc/descript-audio-codec/releases/download/v0.1/dac.pth"
-                    with requests.get(url, stream=True) as r:
-                        r.raise_for_status()
-                        with open(cache_path, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=8192):
-                                f.write(chunk)
+                # Try different repos that might host the DAC model
+                repos = [
+                    "facebook/dac-configs", 
+                    "ttj/dia-1.6b-safetensors",  # Try your repo as it may have the model
+                    "nari-labs/Dia-1.6B"         # Try original repo
+                ]
                 
-                dac_model_path = cache_path
+                dac_model_path = None
+                for repo in repos:
+                    try:
+                        print(f"Trying to download DAC model from {repo}...")
+                        dac_model_path = hf_hub_download(
+                            repo_id=repo,
+                            filename="dac.pth",
+                            cache_dir=os.path.expanduser("~/.cache/descript/dac")
+                        )
+                        print(f"DAC model downloaded from {repo}")
+                        break
+                    except Exception as e:
+                        print(f"Failed to download from {repo}: {e}")
+                
+                if dac_model_path is None:
+                    raise RuntimeError("Could not find DAC model in any repository")
                 
             dac_model = dac.DAC.load(dac_model_path).to(self.device)
         except Exception as e:
