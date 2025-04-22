@@ -4,6 +4,12 @@ import torch
 import torchaudio
 from huggingface_hub import hf_hub_download
 
+try:
+    from safetensors.torch import load_file as load_safetensors
+    SAFETENSORS_AVAILABLE = True
+except ImportError:
+    SAFETENSORS_AVAILABLE = False
+
 from .audio import audio_to_codebook, codebook_to_audio
 from .config import DiaConfig
 from .layers import DiaModel, KVCache
@@ -79,7 +85,7 @@ class Dia:
 
         Args:
             config_path: Path to the configuration JSON file.
-            checkpoint_path: Path to the model checkpoint (.pth) file.
+            checkpoint_path: Path to the model checkpoint (.pth or .safetensors) file.
             device: The device to load the model onto. If None, will automatically select the best available device.
 
         Returns:
@@ -96,7 +102,16 @@ class Dia:
         dia = cls(config, device)
 
         try:
-            state_dict = torch.load(checkpoint_path, map_location=dia.device)
+            # Check if it's a safetensor file
+            if checkpoint_path.endswith('.safetensors'):
+                try:
+                    from safetensors.torch import load_file
+                    state_dict = load_file(checkpoint_path, device=dia.device)
+                except ImportError:
+                    raise ImportError("safetensors not installed. Please install with: pip install safetensors")
+            else:
+                state_dict = torch.load(checkpoint_path, map_location=dia.device)
+                
             dia.model.load_state_dict(state_dict)
         except FileNotFoundError:
             raise FileNotFoundError(f"Checkpoint file not found at {checkpoint_path}")
@@ -110,7 +125,10 @@ class Dia:
 
     @classmethod
     def from_pretrained(
-        cls, model_name: str = "nari-labs/Dia-1.6B", device: torch.device | None = None
+        cls, 
+        model_name: str = "nari-labs/Dia-1.6B", 
+        device: torch.device | None = None,
+        dtype: str = "default"  # Options: "default", "bf16"
     ) -> "Dia":
         """Loads the Dia model from a Hugging Face Hub repository.
 
@@ -120,6 +138,7 @@ class Dia:
         Args:
             model_name: The Hugging Face Hub repository ID (e.g., "NariLabs/Dia-1.6B").
             device: The device to load the model onto. If None, will automatically select the best available device.
+            dtype: The model precision to load - "default" or "bf16"
 
         Returns:
             An instance of the Dia model loaded with weights and set to eval mode.
@@ -129,12 +148,42 @@ class Dia:
             RuntimeError: If there is an error loading the checkpoint.
         """
         config_path = hf_hub_download(repo_id=model_name, filename="config.json")
-        checkpoint_path = hf_hub_download(repo_id=model_name, filename="dia-v0_1.pth")
+        
+        # Choose checkpoint based on dtype
+        if dtype == "bf16":
+            checkpoint_filename = "dia-v0_1_bf16.safetensors"
+        else:
+            # Try safetensors first, then fall back to .pth
+            try:
+                checkpoint_filename = "dia-v0_1.safetensors"
+                checkpoint_path = hf_hub_download(repo_id=model_name, filename=checkpoint_filename)
+            except Exception:
+                checkpoint_filename = "dia-v0_1.pth"
+        
+        try:
+            checkpoint_path = hf_hub_download(repo_id=model_name, filename=checkpoint_filename)
+        except Exception as e:
+            raise FileNotFoundError(f"Failed to download checkpoint file {checkpoint_filename} from {model_name}: {e}")
+            
         return cls.from_local(config_path, checkpoint_path, device)
 
     def _load_dac_model(self):
         try:
-            dac_model_path = dac.utils.download()
+            # Handle different versions of dac module
+            if hasattr(dac, 'utils') and hasattr(dac.utils, 'download'):
+                dac_model_path = dac.utils.download()
+            else:
+                # Fallback for newer dac versions
+                import os
+                from huggingface_hub import hf_hub_download
+                
+                os.makedirs(os.path.expanduser("~/.cache/descript/dac"), exist_ok=True)
+                dac_model_path = hf_hub_download(
+                    repo_id="descriptinc/descript-audio-codec", 
+                    filename="dac.pth",
+                    cache_dir=os.path.expanduser("~/.cache/descript/dac")
+                )
+                
             dac_model = dac.DAC.load(dac_model_path).to(self.device)
         except Exception as e:
             raise RuntimeError("Failed to load DAC model") from e
