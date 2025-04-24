@@ -373,7 +373,7 @@ class Dia:
         audio_prompt_path: str | None = None,
         prof: torch.profiler.profile | None = None,
         compile_kwargs: dict = {},
-        dtype: torch.dtype = torch.float32,
+        dtype: torch.dtype | str = "float32",
     ) -> np.ndarray:
         """
         Generates audio from a text prompt (and optional audio prompt) using the Nari model.
@@ -381,6 +381,8 @@ class Dia:
         Returns:
             A tensor of generated audio codes (shape: [max_tokens, num_channels]).
         """
+        if isinstance(dtype, str):
+            dtype = getattr(torch, dtype)
         num_channels = self.config.data.channels
         audio_bos_value = self.config.data.audio_bos_value
         #audio_eos_value = self.config.data.audio_eos_value

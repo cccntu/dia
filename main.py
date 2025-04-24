@@ -15,7 +15,7 @@ import time
 def generate(text: str, prof=None):
     tik = time.time()
     with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
-        output = model.generate(text, use_torch_compile=True, prof=prof, dtype=torch.bfloat16,
+        output = model.generate(text, use_torch_compile=True, prof=prof, dtype="bfloat16",
                                 compile_kwargs=dict(mode='max-autotune')
                             )
     print(f'{output.shape=}')
