@@ -115,7 +115,7 @@ class Dia:
                     raise ImportError("safetensors not installed. Please install with: pip install safetensors")
             else:
                 state_dict = torch.load(checkpoint_path, map_location="cpu")
-                
+
             dia.model.load_state_dict(state_dict)
         except FileNotFoundError:
             raise FileNotFoundError(f"Checkpoint file not found at {checkpoint_path}")
@@ -129,8 +129,8 @@ class Dia:
 
     @classmethod
     def from_pretrained(
-        cls, 
-        model_name: str = "nari-labs/Dia-1.6B", 
+        cls,
+        model_name: str = "nari-labs/Dia-1.6B",
         device: torch.device | None = None,
         dtype: str = "default"  # Options: "default", "bf16"
     ) -> "Dia":
@@ -152,7 +152,7 @@ class Dia:
             RuntimeError: If there is an error loading the checkpoint.
         """
         config_path = hf_hub_download(repo_id=model_name, filename="config.json")
-        
+
         # Choose checkpoint based on dtype
         if dtype == "bf16":
             checkpoint_filename = "dia-v0_1_bf16.safetensors"
@@ -163,12 +163,12 @@ class Dia:
                 checkpoint_path = hf_hub_download(repo_id=model_name, filename=checkpoint_filename)
             except Exception:
                 checkpoint_filename = "dia-v0_1.pth"
-        
+
         try:
             checkpoint_path = hf_hub_download(repo_id=model_name, filename=checkpoint_filename)
         except Exception as e:
             raise FileNotFoundError(f"Failed to download checkpoint file {checkpoint_filename} from {model_name}: {e}")
-            
+
         return cls.from_local(config_path, checkpoint_path, device)
 
     def _load_dac_model(self):
@@ -176,14 +176,14 @@ class Dia:
             import os
             import requests
             from huggingface_hub import hf_hub_download
-            
+
             # Create cache directory
             os.makedirs(os.path.expanduser("~/.cache/descript/dac"), exist_ok=True)
             cache_dir = os.path.expanduser("~/.cache/descript/dac")
-            
-            # Try to find the DAC model 
+
+            # Try to find the DAC model
             dac_model_path = None
-            
+
             # First try to use dac.utils.download() to get the correct path
             try:
                 dac_model_path = dac.utils.download()
@@ -192,7 +192,7 @@ class Dia:
             except Exception as e:
                 print(f"Failed to use dac.utils.download(): {e}")
                 dac_model_path = None
-                
+
             # Then check for common file names in the cache dir
             if dac_model_path is None:
                 for filename in ['dac.pth', 'weights_44khz_8kbps_0.0.1.pth']:
@@ -201,7 +201,7 @@ class Dia:
                         dac_model_path = cache_file
                         print(f"Found existing DAC model at {dac_model_path}")
                         break
-            
+
             # Then check if any other files in the cache dir match
             if dac_model_path is None:
                 local_files = os.listdir(cache_dir)
@@ -210,7 +210,7 @@ class Dia:
                         dac_model_path = os.path.join(cache_dir, file)
                         print(f"Found existing DAC model at {dac_model_path}")
                         break
-            
+
             # If not found, try to download
             if dac_model_path is None:
                 # Try direct download from Hugging Face repos
@@ -219,7 +219,7 @@ class Dia:
                     "nari-labs/Dia-1.6B",
                     "descriptinc/descript-audio-codec"
                 ]
-                
+
                 for repo in repos:
                     try:
                         print(f"Trying to download DAC model from {repo}...")
@@ -234,29 +234,29 @@ class Dia:
                     except Exception as e:
                         print(f"Failed to download from {repo}: {str(e)}")
                         continue
-            
+
             # If still not found, error out
             if dac_model_path is None or not os.path.exists(dac_model_path):
                 raise RuntimeError("Could not find or download DAC model")
-            
+
             # Load the DAC model with a patch for PyTorch 2.6+ weights_only issue
             try:
                 # Monkey patch the torch.load in audiotools temporarily
                 import torch
                 import types
                 from functools import partial
-                
+
                 # Store original torch.load
                 original_torch_load = torch.load
-                
+
                 # Create patched version with weights_only=False
                 def patched_torch_load(f, *args, **kwargs):
                     kwargs['weights_only'] = False
                     return original_torch_load(f, *args, **kwargs)
-                
+
                 # Monkey patch torch.load temporarily
                 torch.load = patched_torch_load
-                
+
                 # Now load the DAC model
                 try:
                     dac_model = dac.DAC.load(dac_model_path).to(self.device)
@@ -271,10 +271,10 @@ class Dia:
                 dac_model = dac.DAC()
                 dac_model.load_state_dict(state_dict)
                 dac_model = dac_model.to(self.device)
-        
+
         except Exception as e:
             raise RuntimeError(f"Failed to load DAC model: {str(e)}") from e
-        
+
         self.dac_model = dac_model
 
     def _create_attn_mask(
@@ -574,4 +574,4 @@ class Dia:
         audio = codebook_to_audio(
             generated_codes.transpose(1, 0), self.dac_model, delay_pattern, B=1, T=max_tokens, C=num_channels
         )
-        return audio.squeeze().cpu().numpy()
+        return audio.squeeze().float().cpu().numpy()
