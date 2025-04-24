@@ -18,6 +18,20 @@ from .config import DiaConfig
 from .layers import DiaModel, KVCache
 
 
+
+from torch.nn.attention.flex_attention import (
+    _mask_mod_signature,
+    BlockMask,
+    flex_attention,
+)
+from torch.nn.attention.flex_attention import BlockMask, create_block_mask
+
+create_block_mask = torch.compile(create_block_mask)
+
+def causal_mask_mod(b, h, q, kv):
+    return q >= kv
+
+
 def get_default_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
@@ -115,7 +129,7 @@ class Dia:
                     raise ImportError("safetensors not installed. Please install with: pip install safetensors")
             else:
                 state_dict = torch.load(checkpoint_path, map_location="cpu")
-                
+
             dia.model.load_state_dict(state_dict)
         except FileNotFoundError:
             raise FileNotFoundError(f"Checkpoint file not found at {checkpoint_path}")
@@ -129,8 +143,8 @@ class Dia:
 
     @classmethod
     def from_pretrained(
-        cls, 
-        model_name: str = "nari-labs/Dia-1.6B", 
+        cls,
+        model_name: str = "nari-labs/Dia-1.6B",
         device: torch.device | None = None,
         dtype: str = "default"  # Options: "default", "bf16"
     ) -> "Dia":
@@ -152,7 +166,7 @@ class Dia:
             RuntimeError: If there is an error loading the checkpoint.
         """
         config_path = hf_hub_download(repo_id=model_name, filename="config.json")
-        
+
         # Choose checkpoint based on dtype
         if dtype == "bf16":
             checkpoint_filename = "dia-v0_1_bf16.safetensors"
@@ -163,12 +177,12 @@ class Dia:
                 checkpoint_path = hf_hub_download(repo_id=model_name, filename=checkpoint_filename)
             except Exception:
                 checkpoint_filename = "dia-v0_1.pth"
-        
+
         try:
             checkpoint_path = hf_hub_download(repo_id=model_name, filename=checkpoint_filename)
         except Exception as e:
             raise FileNotFoundError(f"Failed to download checkpoint file {checkpoint_filename} from {model_name}: {e}")
-            
+
         return cls.from_local(config_path, checkpoint_path, device)
 
     def _load_dac_model(self):
@@ -176,14 +190,14 @@ class Dia:
             import os
             import requests
             from huggingface_hub import hf_hub_download
-            
+
             # Create cache directory
             os.makedirs(os.path.expanduser("~/.cache/descript/dac"), exist_ok=True)
             cache_dir = os.path.expanduser("~/.cache/descript/dac")
-            
-            # Try to find the DAC model 
+
+            # Try to find the DAC model
             dac_model_path = None
-            
+
             # First try to use dac.utils.download() to get the correct path
             try:
                 dac_model_path = dac.utils.download()
@@ -192,7 +206,7 @@ class Dia:
             except Exception as e:
                 print(f"Failed to use dac.utils.download(): {e}")
                 dac_model_path = None
-                
+
             # Then check for common file names in the cache dir
             if dac_model_path is None:
                 for filename in ['dac.pth', 'weights_44khz_8kbps_0.0.1.pth']:
@@ -201,7 +215,7 @@ class Dia:
                         dac_model_path = cache_file
                         print(f"Found existing DAC model at {dac_model_path}")
                         break
-            
+
             # Then check if any other files in the cache dir match
             if dac_model_path is None:
                 local_files = os.listdir(cache_dir)
@@ -210,7 +224,7 @@ class Dia:
                         dac_model_path = os.path.join(cache_dir, file)
                         print(f"Found existing DAC model at {dac_model_path}")
                         break
-            
+
             # If not found, try to download
             if dac_model_path is None:
                 # Try direct download from Hugging Face repos
@@ -219,7 +233,7 @@ class Dia:
                     "nari-labs/Dia-1.6B",
                     "descriptinc/descript-audio-codec"
                 ]
-                
+
                 for repo in repos:
                     try:
                         print(f"Trying to download DAC model from {repo}...")
@@ -234,29 +248,29 @@ class Dia:
                     except Exception as e:
                         print(f"Failed to download from {repo}: {str(e)}")
                         continue
-            
+
             # If still not found, error out
             if dac_model_path is None or not os.path.exists(dac_model_path):
                 raise RuntimeError("Could not find or download DAC model")
-            
+
             # Load the DAC model with a patch for PyTorch 2.6+ weights_only issue
             try:
                 # Monkey patch the torch.load in audiotools temporarily
                 import torch
                 import types
                 from functools import partial
-                
+
                 # Store original torch.load
                 original_torch_load = torch.load
-                
+
                 # Create patched version with weights_only=False
                 def patched_torch_load(f, *args, **kwargs):
                     kwargs['weights_only'] = False
                     return original_torch_load(f, *args, **kwargs)
-                
+
                 # Monkey patch torch.load temporarily
                 torch.load = patched_torch_load
-                
+
                 # Now load the DAC model
                 try:
                     dac_model = dac.DAC.load(dac_model_path).to(self.device)
@@ -271,10 +285,10 @@ class Dia:
                 dac_model = dac.DAC()
                 dac_model.load_state_dict(state_dict)
                 dac_model = dac_model.to(self.device)
-        
+
         except Exception as e:
             raise RuntimeError(f"Failed to load DAC model: {str(e)}") from e
-        
+
         self.dac_model = dac_model
 
     def _create_attn_mask(
@@ -357,6 +371,9 @@ class Dia:
         use_torch_compile: bool = False,
         cfg_filter_top_k: int = 35,
         audio_prompt_path: str | None = None,
+        prof: torch.profiler.profile | None = None,
+        compile_kwargs: dict = {},
+        dtype: torch.dtype = torch.float32,
     ) -> np.ndarray:
         """
         Generates audio from a text prompt (and optional audio prompt) using the Nari model.
@@ -366,7 +383,8 @@ class Dia:
         """
         num_channels = self.config.data.channels
         audio_bos_value = self.config.data.audio_bos_value
-        audio_eos_value = self.config.data.audio_eos_value
+        #audio_eos_value = self.config.data.audio_eos_value
+        audio_eos_value = torch.tensor(self.config.data.audio_eos_value, device=self.device)
         audio_pad_value = self.config.data.audio_pad_value
         delay_pattern = self.config.data.delay_pattern
         max_tokens = self.config.data.audio_length if max_tokens is None else max_tokens
@@ -410,6 +428,7 @@ class Dia:
                     max_tokens,
                     self.config.model.decoder.gqa_head_dim,
                     self.device,
+                    dtype=dtype,
                 )
             )
 
@@ -486,7 +505,7 @@ class Dia:
         if use_torch_compile:
             decode_step = torch.compile(
                 self.model.decoder.decode_step,
-                mode="default",
+                **compile_kwargs
             )
 
         tgt_padding_mask = (
@@ -499,7 +518,21 @@ class Dia:
             is_causal=False,
         )  # [B, 1, 1, S]
 
+        ####### flex attention
+        max_len = decoder_self_attention_cache[0].max_len
+        block_mask = create_block_mask(
+            causal_mask_mod,
+            1, # broadcast batch
+            1, # broadcast query-head
+            max_len, # Q length
+            max_len, # KV length
+            device=self.device,
+        )
+
+        pos = torch.tensor(current_step, device=self.device).view(1)
         for step in range(current_step, current_step + max_tokens):
+            if prof:
+                prof.step()
             tgt_ids_Bx1xC = generated_BxTxC[:, step, :].unsqueeze(1)
             tgt_pos_Bx1 = torch.full(
                 (2, 1),
@@ -512,14 +545,17 @@ class Dia:
                 tgt_ids_Bx1xC=tgt_ids_Bx1xC,
                 tgt_pos_Bx1=tgt_pos_Bx1,
                 encoder_out=encoder_out,
-                self_attn_mask=None,
+                self_attn_mask=block_mask,
                 cross_attn_mask=decoder_cross_attn_mask,
                 self_attention_cache=decoder_self_attention_cache,
                 cross_attention_cache=decoder_cross_attention_cache,
+                pos=pos,
+                max_len=max_len,
             )
+            pos +=1
 
-            for i, layer_cache in enumerate(decoder_self_attention_cache):
-                layer_cache.update_cache(new_cache[i][0], new_cache[i][1])
+            #for i, layer_cache in enumerate(decoder_self_attention_cache):
+            #    layer_cache.update_cache(new_cache[i][0], new_cache[i][1])
 
             V = self.config.model.tgt_vocab_size
             logits_last_BxCxV = logits_Bx1xCxV[:, -1, :, :]  # B, C, V
@@ -574,4 +610,4 @@ class Dia:
         audio = codebook_to_audio(
             generated_codes.transpose(1, 0), self.dac_model, delay_pattern, B=1, T=max_tokens, C=num_channels
         )
-        return audio.squeeze().cpu().numpy()
+        return audio.squeeze().to(torch.float32).cpu().numpy()

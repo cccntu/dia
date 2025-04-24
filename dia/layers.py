@@ -9,6 +9,14 @@ from torch.nn import RMSNorm
 from .config import DiaConfig
 
 
+from torch.nn.attention.flex_attention import flex_attention, _mask_mod_signature
+
+def get_mask_mod(mask_mod: _mask_mod_signature, offset: int):
+    def _mask_mod(b, h, q, kv):
+        return mask_mod(b, h, q + offset, kv)
+
+    return _mask_mod
+
 def _normalize_axes(axes: tuple[int, ...], ndim: int) -> tuple[int, ...]:
     return tuple(ax if ax >= 0 else ndim + ax for ax in axes)
 
@@ -207,24 +215,26 @@ class RotaryEmbedding(nn.Module):
         return torch.cat((first_part, second_part), dim=-1)
 
 
-class KVCache:
-    def __init__(self, num_heads, max_len, head_dim, device, k=None, v=None):
-        self.k = torch.zeros((2, num_heads, max_len, head_dim), device=device) if k is None else k
-        self.v = torch.zeros((2, num_heads, max_len, head_dim), device=device) if v is None else v
+class KVCache(nn.Module):
+    def __init__(self, num_heads, max_len, head_dim, device, k=None, v=None, dtype=torch.float32):
+        super().__init__()
+
+        cache_shape = (2, num_heads, max_len, head_dim)
+        #self.k = torch.zeros(cache_shape, device=device, dtype=dtype) if k is None else k
+        #self.v = torch.zeros(cache_shape, device=device, dtype=dtype) if v is None else v
+        # use register_buffer for mutable tensors to make inductor and cudagraph happy
+        self.register_buffer('k', torch.zeros(cache_shape, device=device, dtype=dtype) if k is None else k)
+        self.register_buffer('v', torch.zeros(cache_shape, device=device, dtype=dtype) if v is None else v)
         self.current_idx = 0
         self.max_len = max_len
 
-    def get_kv_for_attention(self, current_k, current_v):
-        if self.current_idx == 0:
-            return current_k, current_v
-        else:
-            past_k = self.k[:, :, : self.current_idx, :]
-            past_v = self.v[:, :, : self.current_idx, :]
-            attn_k = torch.cat((past_k, current_k), dim=2)
-            attn_v = torch.cat((past_v, current_v), dim=2)
-            return attn_k, attn_v
+    def get_kv_for_attention(self, current_k, current_v, q_positions):
+        self.v[:, :, q_positions, :] = current_v
+        self.k[:, :, q_positions, :] = current_k
+        return self.k, self.v
 
     def update_cache(self, k, v):
+        return
         assert self.current_idx < self.max_len
         self.k[:, :, self.current_idx : self.current_idx + 1, :] = k
         self.v[:, :, self.current_idx : self.current_idx + 1, :] = v
@@ -347,6 +357,7 @@ class Attention(nn.Module):
         attn_v: torch.Tensor | None = None
         new_kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None
 
+        use_flex_attention = False
         # Decoder Cross Attention
         if self.is_cross_attn:
             # Directly use cache (no need to check index)
@@ -387,16 +398,28 @@ class Attention(nn.Module):
                 # In decode step, we add current K/V to cache step by step
                 else:
                     new_kv_cache = Xk_BxNxSxH, Xv_BxNxSxH
-                    attn_k, attn_v = cache.get_kv_for_attention(Xk_BxNxSxH, Xv_BxNxSxH)
+                    attn_k, attn_v = cache.get_kv_for_attention(Xk_BxNxSxH, Xv_BxNxSxH, q_positions.squeeze())
+                    use_flex_attention = True
 
-        attn_output = F.scaled_dot_product_attention(
-            Xq_BxNxTxH,
-            attn_k,
-            attn_v,
-            attn_mask=attn_mask,
-            dropout_p=self.dropout_rate if not deterministic else 0.0,
-            scale=1.0,
-        )
+        if use_flex_attention:
+            attn_output = flex_attention(
+                Xq_BxNxTxH,    # [B, N, 1, H] on decode
+                attn_k,
+                attn_v,
+                block_mask=attn_mask,
+                scale=1.0,
+                enable_gqa=(self.num_query_heads != self.num_kv_heads),
+            )
+        else:
+            attn_output = F.scaled_dot_product_attention(
+                Xq_BxNxTxH,
+                attn_k,
+                attn_v,
+                attn_mask=attn_mask,
+                dropout_p=self.dropout_rate if not deterministic else 0.0,
+                scale=1.0,
+            )
+
 
         attn_output = attn_output.transpose(1, 2).contiguous()  # (B, T, N, H)
         output = self.o_proj(attn_output)
@@ -705,6 +728,7 @@ class Decoder(nn.Module):
                     k.device,
                     k=k,
                     v=v,
+                    dtype=torch.bfloat16,
                 )
             )
 
@@ -719,6 +743,8 @@ class Decoder(nn.Module):
         cross_attn_mask: torch.Tensor,  # [B, 1, 1, S]
         self_attention_cache: list[KVCache],
         cross_attention_cache: list[KVCache],
+        pos: torch.Tensor,
+        max_len: int,
     ) -> torch.Tensor:
         """
         Performs a single decoding step, managing KV caches layer by layer.
@@ -727,7 +753,12 @@ class Decoder(nn.Module):
             A tuple containing:
             - logits_Bx1xCV: The final output logits for the current step (B, 1, C*V), cast to float32.
         """
-        assert self_attn_mask is None, "Self-attention mask should be None, kept for pattern"
+        block_mask = self_attn_mask
+        block_idx   = pos // block_mask.BLOCK_SIZE[0]
+        mask        = block_mask[:, :, block_idx]
+        mask.seq_lengths = (1, max_len)
+        mask.mask_mod = get_mask_mod(block_mask.mask_mod, pos[0])
+        self_attn_mask = mask
 
         x = None
         for i in range(self.num_channels):
@@ -746,7 +777,7 @@ class Decoder(nn.Module):
                 src_positions=None,  # CA KV is already computed
                 tgt_positions=tgt_pos_Bx1,  # (2, 1)
                 deterministic=True,
-                self_attn_mask=None,
+                self_attn_mask=self_attn_mask,
                 cross_attn_mask=cross_attn_mask,
                 self_attn_cache=self_cache,
                 cross_attn_cache=cross_cache,
